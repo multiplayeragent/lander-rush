@@ -1,0 +1,21 @@
+{
+  "name": "Lander Rush",
+  "genre": "arcade",
+  "dim": "2D",
+  "mode": "Versus",
+  "players": "2–8",
+  "hook": "Race rival rockets to land softly on tiny pads.",
+  "how": "Thrust and tilt your lander over a cratered moon and touch down gently on a glowing pad. Smaller pads pay more, and each pad jumps away once someone lands on it. Grab fuel cans, bump rivals off course, and top the score when the time runs out.",
+  "controls": "← → to tilt, ↑ or Space to thrust; on touch, the tilt buttons and THRUST",
+  "uses": [
+    ["Live sync", "Every lander flies for everyone at once, and you can bump into each other."],
+    ["Host-run rules", "The host's browser owns the pads, the fuel cans and the scores, and checks every landing. If it leaves, the next player takes over."],
+    ["Bots", "Bots fill empty seats, race for pads and grab fuel."],
+    ["Leaderboard", "Each player's best round score."]
+  ],
+  "ideas": [
+    "Add wind that pushes the landers sideways",
+    "Make it a cargo run: pick up a crate and drop it on a pad",
+    "Turn the moon into a red Mars with dust storms"
+  ]
+}

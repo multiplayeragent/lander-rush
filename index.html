@@ -1,0 +1,742 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lander Rush</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; background: #05060f; }
+  body { font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #eef1ff; user-select: none; -webkit-user-select: none; }
+  canvas { display: block; width: 100vw; height: 100vh; height: 100dvh; touch-action: none; }
+  [hidden] { display: none !important; }
+  .hud { position: fixed; pointer-events: none; text-shadow: 0 1px 4px #000c; }
+  #stats { top: max(10px, env(safe-area-inset-top)); left: max(12px, env(safe-area-inset-left)); font-weight: 800; font-size: 20px; }
+  #stats small { display: block; font-size: 12px; font-weight: 700; opacity: .8; margin-top: 2px; }
+  #fuel { width: 130px; height: 9px; border-radius: 5px; background: #ffffff22; margin-top: 6px; overflow: hidden; }
+  #fuel i { display: block; height: 100%; width: 100%; background: #ffd23f; border-radius: 5px; transition: width .1s; }
+  #clock { top: max(10px, env(safe-area-inset-top)); left: 0; right: 0; text-align: center; font: 800 22px system-ui, sans-serif; font-variant-numeric: tabular-nums; }
+  #hint { bottom: calc(max(12px, env(safe-area-inset-bottom)) + 22px); left: 0; right: 0; padding: 0 16px; text-align: center; font-size: 14px; font-weight: 600; opacity: .9; transition: opacity .8s; }
+  #net { bottom: max(8px, env(safe-area-inset-bottom)); left: max(12px, env(safe-area-inset-left)); font-size: 12px; opacity: .7; }
+  .touch #hint { bottom: calc(max(12px, env(safe-area-inset-bottom)) + 120px); }
+  #over { position: fixed; inset: 0; display: grid; place-items: center; background: #05060fb8; padding: 16px; }
+  .card { box-sizing: border-box; width: min(380px, calc(100vw - 32px)); max-height: 88vh; overflow: auto; padding: 20px; border-radius: 18px; background: #141834; border: 1px solid #ffffff22; text-align: center; box-shadow: 0 20px 60px #0009; }
+  .card h2 { margin: 0 0 6px; font-size: 26px; }
+  .card h3 { margin: 12px 0 0; font-size: 12px; letter-spacing: .1em; color: #9fa8e0; }
+  .card ol { text-align: left; margin: 8px 0; padding-left: 26px; font-size: 14px; } .card li span { float: right; font-variant-numeric: tabular-nums; } .card li.me { color: #ffd23f; font-weight: 700; }
+  button.go { width: 100%; min-height: 48px; border: 0; border-radius: 12px; background: #ffd23f; color: #141834; font: 800 17px system-ui, sans-serif; cursor: pointer; margin-top: 8px; }
+  #oNext { color: #9fa8e0; font-size: 13px; margin-top: 8px; }
+  .pad { position: fixed; bottom: max(24px, calc(env(safe-area-inset-bottom) + 14px)); width: 76px; height: 76px; border-radius: 50%; border: 2px solid #ffffff55; background: #ffffff14; color: #fff; font: 800 26px system-ui, sans-serif; touch-action: none; }
+  .pad.on { background: #ffffff44; }
+  #tl { left: max(16px, env(safe-area-inset-left)); } #tr { left: calc(max(16px, env(safe-area-inset-left)) + 88px); }
+  #th { right: max(18px, env(safe-area-inset-right)); width: 104px; height: 104px; border-color: #ffb34799; background: #ffb34722; font-size: 15px; }
+</style>
+<script src="https://cdn.multiplayeragent.com/sdk/mp.global.js"></script>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div class="hud" id="stats"></div>
+<div class="hud" id="clock"></div>
+<div class="hud" id="hint"></div>
+<div class="hud" id="net">Connecting…</div>
+<button class="pad" id="tl" hidden>⟲</button><button class="pad" id="tr" hidden>⟳</button><button class="pad" id="th" hidden>THRUST</button>
+<div id="over" hidden><div class="card">
+  <h2 id="oTitle"></h2><ol id="places"></ol>
+  <h3>BEST ROUND SCORE</h3><ol id="board"><li>Loading the leaderboard…</li></ol>
+  <button class="go" id="again">Play again</button><div id="oNext"></div>
+</div></div>
+<script>
+/* ═══ LANDER RUSH · a Multiplayer Agent starter ══════════════════════════════════════════
+ * Rocket landers on a cratered moon. Thrust, tilt, and touch down softly on a glowing pad:
+ * the smaller the pad, the more it pays, and a pad jumps somewhere else once someone lands
+ * on it. Fuel is short; grab the floating cans. Versus, 2–8 players; bots fill empty seats.
+ *
+ * WHERE THINGS ARE (search for the "── " headers):
+ *   CONFIG ........ world size, gravity, thrust, fuel, safe landing limits, round length, bots
+ *   CONNECTION .... MP_CONNECT, joining, the offline room, who is host
+ *   TERRAIN ....... the moon's surface from the round seed: hills, craters, flat pad sites
+ *   LANDER ........ flying, landing, crashing, bumping (players and bots share it)
+ *   ROUND (HOST) .. countdown, timer, pads, fuel cans, scores, the winner. Only the host writes these.
+ *   BOTS (HOST) ... a bot picks a pad (or a can), flies over it and lets itself down gently
+ *   ME ............ my lander: input, landing intents, publishing
+ *   OTHERS ........ everyone else's landers, eased between snapshots
+ *   DRAW .......... camera, stars, the moon, pads, cans, landers, effects, mini-map
+ *   HUD & RESULTS . score, fuel, clock, results card, leaderboard, sound
+ *   INPUT ......... keys and touch buttons
+ *
+ * HOW THE MULTIPLAYER WORKS (a relay room: no server code):
+ *   - Each lander is its OWN player's physics. A player writes `l` = [x, y, angle, vx, vy,
+ *     thrusting, state] (state "f" flying, "l" landed, "x" crashed) about 12 times a second,
+ *     plus `n` (name), `c` (color) and `hb` (heartbeat). Landers bump: each player pushes
+ *     only its own lander away from the others it touches.
+ *   - The HOST (lowest live sessionId) owns ONE shared field, `round`: {id, v, ph, seed,
+ *     startAt, endsAt, scores, bots, pads, cans, nk, winner}. `pads` = which flat sites are lit,
+ *     `cans` = the fuel cans. `v` goes up on every write. Bots fly in the shared array `bots`.
+ *   - Everyone builds the same terrain from round.seed (a seeded random generator).
+ *   - Touching down softly on a lit pad sends the intent "land" {s, x, m}; the host checks
+ *     the pad is still lit and you're on it, adds the points to round.scores, moves the pad,
+ *     and sends "landed" {to, pts, s} so everyone sees the "+400". Too late = 0 points.
+ *   - Flying through a can sends "grab" {k, m}; the host removes it, puts a new one up and
+ *     sends "fuel" {to}, which tops up that player's own fuel.
+ *   - ?attract plays offline with bots only (the preview video is recorded from it).
+ *   - Leaderboard "lander-score": each player's best round score.
+ */
+
+// ── CONFIG ──────────────────────────────────────────────────────────────────────────
+const CONFIG = {
+  seats: 4,              // bots fill the moon up to this many landers
+  worldW: 2600, worldH: 1200, // the world, in world units (y points down)
+  step: 16,              // terrain detail: one height every 16 units
+  gravity: 55,           // units/s² downwards
+  thrust: 145,           // units/s² along the lander's nose
+  turn: 3.2,             // rad/s
+  maxTilt: 1.4,          // radians either side of upright
+  fuel: 100,             // a full tank…
+  burn: 8,               // …burns this much per second of thrust
+  canFuel: 45,           // a fuel can adds this much
+  padRefuel: 30,         // fuel per second while sitting on any pad site
+  safeVy: 55, safeVx: 40, safeTilt: 0.32, // a landing softer and straighter than this is safe
+  softBonus: 50,         // extra points for touching down under 20 units/s
+  sites: 9,              // flat pad sites on the moon…
+  lit: 3,                // …this many lit at once
+  padSizes: [[130, 100], [85, 200], [52, 400]], // [width, points]: smaller pads pay more
+  cans: 4,               // fuel cans floating at once
+  bumpBounce: 0.9,       // how bouncy lander-on-lander bumps are
+  respawnMs: 1800,       // after a crash
+  roundMs: 90000, countdownMs: 3000, overMs: 9000,
+  sendMs: 80,            // my lander ~12 times a second
+  botAim: 26,            // how far off a bot lines up over a pad, units
+  botDescent: 34,        // the vertical speed a bot aims for on its final approach (safeVy is the limit)
+  botWaitMs: [500, 1400], // a bot sits this long on a pad before taking off again
+  board: "lander-score", // leaderboard name
+};
+const BOT_NAMES = ["Eagle", "Falcon", "Luna", "Apollo", "Selene", "Orbit", "Comet", "Rover", "Vega", "Kepler"];
+const COLORS = ["#ffd23f", "#4cc9f0", "#f72585", "#80ed99", "#ff9f1c", "#b388ff", "#ff6b6b", "#00f5d4", "#e9ff70", "#ff8fab"];
+const R = 14; // a lander's radius for bumps; its feet are R below its middle
+
+// ── CONNECTION ──────────────────────────────────────────────────────────────────────
+// The builder fills these in for this game. Downloaded from GitHub? Put your own pk_ key here.
+const MP_CONNECT = {
+  key: 'pk_REPLACE_ME',
+  room: 'lander-rush',
+  endpoint: 'wss://live.multiplayeragent.com',
+  apiUrl: 'https://api.multiplayeragent.com',
+};
+const ATTRACT = new URLSearchParams(location.search).has("attract");
+if (ATTRACT) Object.assign(CONFIG, { seats: 5, worldW: 1150, sites: 4, countdownMs: 200, roundMs: 60000, respawnMs: 900, lit: 3, botWaitMs: [250, 600] });
+
+/** Same shape as the SDK client, kept in this tab: offline play and ?attract. */
+function localRoom() {
+  const id = "local", state = { entities: { players: { [id]: {} } }, shared: {} }, subs = [];
+  let queued = false;
+  const emit = () => { if (!queued) { queued = true; queueMicrotask(() => { queued = false; subs.forEach((f) => f(state)); }); } };
+  const put = (o, k, v) => { if (typeof k === "object") Object.assign(o, k); else o[k] = v; emit(); };
+  return {
+    sessionId: id, state, offline: true,
+    me: { set: (k, v) => put(state.entities.players[id], k, v) },
+    setShared: (k, v) => put(state.shared, k, v),
+    onState: (f) => { subs.push(f); f(state); }, onJoin() {}, onLeave() {}, on() {}, send() {},
+    onDisconnect() {}, onReconnect() {}, leave: async () => {},
+  };
+}
+async function connect() {
+  if (ATTRACT || typeof MP === "undefined") return localRoom();
+  try {
+    const mp = await Promise.race([MP.join({ ...MP_CONNECT }), new Promise((_, no) => setTimeout(() => no(new Error("timed out")), 10000))]);
+    window.mp = mp; // the builder calls window.mp.leave() when the page closes
+    return mp;
+  } catch (e) {
+    console.warn("Playing offline:", e && e.message);
+    return localRoom();
+  }
+}
+const parse = (v, fb) => { if (typeof v !== "string") return fb; try { return JSON.parse(v); } catch { return fb; } };
+const memo = new Map();
+/** A JSON field (shared or a player's), parsed once per change. Read-only. */
+function cached(key, raw, fb) { const m = memo.get(key); if (m && m.raw === raw) return m.v; const v = parse(raw, fb); memo.set(key, { raw, v }); return v; }
+let net = null, S = { entities: { players: {} }, shared: {} };
+const seenHb = new Map();
+function livePlayers() {
+  const now = performance.now(), out = [];
+  for (const [id, p] of Object.entries(S.entities.players || {})) {
+    const s = seenHb.get(id);
+    if (!s || s.hb !== p.hb) seenHb.set(id, { hb: p.hb, at: now });
+    if (id === net.sessionId || now - seenHb.get(id).at < 3000) out.push(id);
+  }
+  return out.sort();
+}
+let hostHold = 0, lastTick = performance.now(); // lastTick: when frame() last ran; hostHold: after a freeze, no hosting before this time (see frame())
+const isHost = () => performance.now() > hostHold && performance.now() - lastTick < 1000 && livePlayers()[0] === net.sessionId; // a tab whose loop has stopped doesn't host
+const humans = () => livePlayers().filter((id) => !(ATTRACT && id === net.sessionId));
+
+// ── TERRAIN ─────────────────────────────────────────────────────────────────────────
+function mulberry32(a) { return () => { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+let terrain = null; // { seed, h: heights, sites: [{x, w, y, pts}], craters: [{x, y, r}] }
+/** The moon for a round: rolling hills, craters, and `sites` flattened spots where pads can be lit. */
+function makeTerrain(seed) {
+  const r = mulberry32(seed), N = Math.ceil(CONFIG.worldW / CONFIG.step) + 1, h = [], base = CONFIG.worldH - 300;
+  const waves = [[r() * 6.3, 0.0019 + r() * 0.0008, 150], [r() * 6.3, 0.006 + r() * 0.003, 70], [r() * 6.3, 0.018 + r() * 0.006, 16]];
+  for (let i = 0; i < N; i++) { const x = i * CONFIG.step; h.push(base - waves.reduce((s, [p, f, a]) => s + Math.sin(x * f + p) * a, 0)); }
+  const craters = [];
+  for (let c = 0; c < 9; c++) {
+    const cx = r() * CONFIG.worldW, cr = 50 + r() * 120;
+    craters.push({ x: cx, r: cr });
+    for (let i = 0; i < N; i++) { const d = Math.abs(i * CONFIG.step - cx) / cr; if (d < 1) h[i] += cr * 0.5 * (1 - d * d); else if (d < 1.4) h[i] -= cr * 0.16 * Math.sin(((d - 1) / 0.4) * Math.PI); }
+  }
+  const sites = [], slot = CONFIG.worldW / CONFIG.sites;
+  for (let s = 0; s < CONFIG.sites; s++) {
+    const [w, pts] = CONFIG.padSizes[s % CONFIG.padSizes.length], x = slot * (s + 0.5) + (r() - 0.5) * (slot - w - 80);
+    const i0 = Math.floor((x - w / 2 - 20) / CONFIG.step), i1 = Math.ceil((x + w / 2 + 20) / CONFIG.step);
+    let y = 0; for (let i = i0; i <= i1; i++) y += h[clamp(i, 0, N - 1)]; y = Math.round(y / (i1 - i0 + 1));
+    for (let i = i0 - 4; i <= i1 + 4; i++) { if (i < 0 || i >= N) continue; const k = i < i0 ? (i0 - i) / 5 : i > i1 ? (i - i1) / 5 : 0; h[i] = y + (h[i] - y) * k; } // flat in the middle, blended at the edges
+    sites.push({ x: Math.round(x), w, y, pts });
+  }
+  sites.sort(() => r() - 0.5); // so pad sizes aren't in order across the moon
+  for (let i = 0; i < N; i++) h[i] = clamp(h[i], 480, CONFIG.worldH - 40);
+  return { seed, h, sites, craters };
+}
+function terrainFor(seed) { if (!terrain || terrain.seed !== seed) terrain = makeTerrain(seed); return terrain; }
+function groundY(x) {
+  const h = terrain.h, f = clamp(x, 0, CONFIG.worldW - 0.01) / CONFIG.step, i = Math.floor(f);
+  return h[i] + (h[Math.min(h.length - 1, i + 1)] - h[i]) * (f - i);
+}
+const siteAt = (x) => terrain.sites.findIndex((s) => Math.abs(x - s.x) <= s.w / 2 - 6);
+
+// ── LANDER ──────────────────────────────────────────────────────────────────────────
+// A lander (mine or a bot's): { x, y, a (tilt, 0 = upright), vx, vy, t (thrusting), st ("f" flying, "l" landed, "x" crashed), fuel, respawnAt }.
+function spawnLander(L, now, x) {
+  x = x ?? 150 + Math.random() * (CONFIG.worldW - 300);
+  Object.assign(L, { x, y: terrain ? Math.max(90, groundY(x) - 400 - Math.random() * 80) : 150, a: 0, vx: (Math.random() - 0.5) * 40, vy: 0, t: 0, st: "f", fuel: CONFIG.fuel, respawnAt: 0, landedAt: 0 });
+  return L;
+}
+/** One tick of flight: tilt, thrust, gravity, walls. Returns "land", "crash" or "" for what happened at the ground. */
+function flyLander(L, dt, turn, thrust) {
+  if (L.st === "l") {
+    L.t = 0;
+    if (siteAt(L.x) >= 0) L.fuel = Math.min(CONFIG.fuel, L.fuel + CONFIG.padRefuel * dt); // sitting on any pad site tops the tank up
+    else if (L.fuel <= 0) { L.stuck = (L.stuck || 0) + dt; if (L.stuck > 2) { L.stuck = 0; spawnLander(L, 0); } } // out of fuel on bare ground: a fresh lander
+    if (thrust && L.fuel > 0) { L.st = "f"; L.vy = -30; L.y -= 2; }
+    return "";
+  }
+  if (L.st !== "f") return "";
+  L.a = clamp(L.a + turn * CONFIG.turn * dt, -CONFIG.maxTilt, CONFIG.maxTilt);
+  L.t = thrust && L.fuel > 0 ? 1 : 0;
+  if (L.t) { L.vx += Math.sin(L.a) * CONFIG.thrust * dt; L.vy -= Math.cos(L.a) * CONFIG.thrust * dt; L.fuel = Math.max(0, L.fuel - CONFIG.burn * dt); }
+  L.vy += CONFIG.gravity * dt;
+  L.x += L.vx * dt; L.y += L.vy * dt;
+  if (L.x < R) { L.x = R; L.vx = Math.abs(L.vx) * 0.5; } else if (L.x > CONFIG.worldW - R) { L.x = CONFIG.worldW - R; L.vx = -Math.abs(L.vx) * 0.5; }
+  if (L.y < R) { L.y = R; L.vy = Math.max(0, L.vy); }
+  const gl = groundY(L.x - 9), gr = groundY(L.x + 9), g = Math.min(gl, gr); // two feet
+  if (L.y + R < g) return "";
+  const flat = Math.abs(gl - gr) < 8, safe = flat && L.vy <= CONFIG.safeVy && Math.abs(L.vx) <= CONFIG.safeVx && Math.abs(L.a) <= CONFIG.safeTilt;
+  if (safe) { L.y = g - R; L.soft = L.vy < 20; L.vx = L.vy = 0; L.a = 0; L.t = 0; L.st = "l"; return "land"; }
+  L.st = "x"; L.t = 0; L.y = g - R * 0.5; return "crash";
+}
+/** Push `L` out of any lander it overlaps, taking its half of the bounce. Each owner does this for its own lander. */
+function bumpLander(L, others) {
+  if (L.st !== "f") return false;
+  let hit = false;
+  for (const o of others) {
+    if (o.st === "x") continue;
+    const dx = L.x - o.x, dy = L.y - o.y, d = Math.hypot(dx, dy);
+    if (d >= 2 * R || d < 0.01) continue;
+    const nx = dx / d, ny = dy / d, rel = (L.vx - (o.vx || 0)) * nx + (L.vy - (o.vy || 0)) * ny;
+    L.x += nx * (2 * R - d) * (o.st === "l" ? 1 : 0.5); L.y += ny * (2 * R - d) * (o.st === "l" ? 1 : 0.5);
+    if (rel < 0) { const k = o.st === "l" ? 1 + CONFIG.bumpBounce : CONFIG.bumpBounce; L.vx -= rel * nx * k; L.vy -= rel * ny * k; hit = Math.abs(rel) > 25; }
+  }
+  return hit;
+}
+
+// ── ROUND (HOST) ────────────────────────────────────────────────────────────────────
+const host = { last: null, was: false, bots: new Map(), botsRaw: "", lastBots: 0 };
+function round() {
+  const r = parse(S.shared.round, null);
+  return host.last && isHost() && (!r || host.last.v > r.v) ? host.last : r;
+}
+function writeRound(r) { r = { ...r, v: (round()?.v ?? 0) + 1 }; host.last = r; net.setShared("round", JSON.stringify(r)); return r; }
+const nameOf = (r, id) => (id === net.sessionId ? myName : r?.bots.find((b) => b.i === id)?.n) || String(S.entities.players?.[id]?.n ?? "Player").slice(0, 14);
+const colorOf = (r, id) => (id === net.sessionId ? myColor : r?.bots.find((b) => b.i === id)?.c) || S.entities.players?.[id]?.c || "#aaa";
+function newCan(r, k) { const x = 120 + Math.random() * (CONFIG.worldW - 240); return { k, x: Math.round(x), y: Math.round(Math.max(120, groundY(x) - 120 - Math.random() * 240)) }; }
+function newRound(id) {
+  const seed = (Math.random() * 1e9) | 0, t = Date.now();
+  terrainFor(seed);
+  const shuffled = [...terrain.sites.keys()].sort(() => Math.random() - 0.5), pads = [];
+  for (let k = 0; pads.length < Math.min(CONFIG.lit, shuffled.length); k++) { const want = CONFIG.padSizes[k % CONFIG.padSizes.length][1], s = shuffled.find((i) => !pads.includes(i) && terrain.sites[i].pts === want) ?? shuffled.find((i) => !pads.includes(i)); pads.push(s); } // one of each size
+  const r = { id, ph: "count", seed, startAt: t + CONFIG.countdownMs, endsAt: t + CONFIG.countdownMs + CONFIG.roundMs, scores: {}, bots: [], pads, cans: [], nk: 1, winner: "" };
+  for (let i = 0; i < CONFIG.cans; i++) r.cans.push(newCan(r, r.nk++));
+  host.bots = new Map();
+  return { ...r, bots: fitBots(r, []) };
+}
+/** Bots fill the seats people don't take: a bot leaves when someone joins, and comes back when they go. */
+function fitBots(r, bots) {
+  const want = Math.max(0, CONFIG.seats - humans().length);
+  bots = bots.slice(0, want);
+  const used = new Set([...humans().map((h) => colorOf(null, h)), ...bots.map((b) => b.c)]), names = BOT_NAMES.filter((n) => !bots.some((b) => b.n === n));
+  for (let k = 1; bots.length < want; k++) if (!bots.some((b) => b.i === "bot" + k)) bots.push({ i: "bot" + k, n: names[(k * 3 + (r.seed & 7)) % names.length], c: COLORS.find((c) => !used.has(c) && !bots.some((b) => b.c === c)) || "#ccc" });
+  for (const id of host.bots.keys()) if (!bots.some((b) => b.i === id)) host.bots.delete(id);
+  for (const b of bots) if (!host.bots.has(b.i)) host.bots.set(b.i, newBot());
+  return bots;
+}
+const newBot = () => ({ L: spawnLander({}, Date.now()), target: null, thinkAt: 0, err: 0, waitUntil: 0 });
+/** Become host: take the round and the bots' landers over exactly as state has them. */
+function adopt() {
+  host.was = true; host.last = null; host.bots = new Map();
+  const r = round();
+  if (!r) return;
+  terrainFor(r.seed);
+  for (const v of cached("bots", S.shared.bots, [])) if (r.bots.some((b) => b.i === v.i)) host.bots.set(v.i, { ...newBot(), L: { x: v.x, y: v.y, a: v.a, vx: v.vx, vy: v.vy, t: v.t, st: v.st, fuel: v.f ?? CONFIG.fuel, respawnAt: Date.now() + CONFIG.respawnMs } });
+  for (const b of r.bots) if (!host.bots.has(b.i)) host.bots.set(b.i, newBot());
+}
+function hostTick(dt, now) {
+  if (!host.was) adopt();
+  let r = round();
+  if (!r) r = writeRound(newRound(1));
+  terrainFor(r.seed);
+  if (r.ph !== "over") { const bots = fitBots(r, r.bots); if (bots.map((b) => b.i).join() !== r.bots.map((b) => b.i).join()) r = writeRound({ ...r, bots }); }
+  if (r.ph === "count" && now >= r.startAt) r = writeRound({ ...r, ph: "play" });
+  else if (r.ph === "play" && now >= r.endsAt) r = writeRound({ ...r, ph: "over", winner: winnerOf(r), endsAt: now + CONFIG.overMs });
+  else if (r.ph === "over" && now >= r.endsAt) r = writeRound(newRound(r.id + 1));
+  if (r.ph === "play") botsTick(r, dt, now);
+  writeBots(r);
+}
+/** The single top score among those still here; a tie (or nobody scoring) is a draw. */
+function winnerOf(r) {
+  const ids = [...humans(), ...r.bots.map((b) => b.i)], best = Math.max(0, ...ids.map((id) => r.scores[id] || 0)), top = ids.filter((id) => (r.scores[id] || 0) === best);
+  return best > 0 && top.length === 1 ? top[0] : "";
+}
+/** A landing on site `s` at x: points if that pad is still lit and the lander is on it. The pad then moves. */
+function landOn(id, s, x, soft) {
+  const r = round(), site = terrain && terrain.sites[s];
+  if (!r || r.ph !== "play" || !site) return;
+  const ok = r.pads.includes(s) && Math.abs(x - site.x) <= site.w / 2 + 40;
+  const pts = ok ? site.pts + (soft ? CONFIG.softBonus : 0) : 0;
+  if (ok) {
+    const free = [...terrain.sites.keys()].filter((i) => !r.pads.includes(i) && i !== s), same = free.filter((i) => terrain.sites[i].pts === site.pts); // the pad moves to another site of its size
+    if (same.length) free.splice(0, free.length, ...same);
+    writeRound({ ...r, scores: { ...r.scores, [id]: (r.scores[id] || 0) + pts }, pads: r.pads.map((p) => (p === s ? free[Math.floor(Math.random() * free.length)] : p)) });
+    if (host.bots.has(id)) host.bots.get(id).L.fuel = CONFIG.fuel; // a scored landing fills the tank (people fill their own when their score goes up)
+  }
+  showLanded(id, pts, s);
+  net.send("landed", { to: id, pts, s, m: r.id });
+}
+/** A fuel can grabbed: gone, a new one goes up somewhere else, and the grabber gets its fuel. */
+function grabCan(id, k, x, y) {
+  const r = round(), c = r && r.cans.find((q) => q.k === k);
+  if (!c || r.ph !== "play" || Math.hypot(c.x - x, c.y - y) > 140) return;
+  const nk = r.nk + 1;
+  writeRound({ ...r, cans: r.cans.map((q) => (q.k === k ? newCan(r, r.nk) : q)), nk });
+  giveFuel(id, x, y);
+  net.send("fuel", { to: id, x: Math.round(x), y: Math.round(y), m: r.id });
+}
+function giveFuel(id, x, y) {
+  burst(x, y, "#ffd23f", 16, 160);
+  if (id === net.sessionId) { me.L.fuel = Math.min(CONFIG.fuel, me.L.fuel + CONFIG.canFuel); tone(880, 90, "triangle"); setTimeout(() => tone(1320, 120, "triangle"), 70); }
+  else if (isHost() && host.bots.has(id)) { const L = host.bots.get(id).L; L.fuel = Math.min(CONFIG.fuel, L.fuel + CONFIG.canFuel); }
+}
+
+// ── BOTS (HOST) ─────────────────────────────────────────────────────────────────────
+/** Pick something to fly to: a can when fuel is low, else the lit pad that pays best for the trip. */
+function botTarget(bot, r) {
+  const L = bot.L;
+  const onFinal = bot.target && bot.target.site !== undefined && Math.abs(bot.target.x - L.x) < 60 && groundY(L.x) - L.y < 200;
+  if (L.fuel < 35 && r.cans.length && !onFinal) { const c = r.cans.reduce((a, b) => (Math.abs(b.x - L.x) < Math.abs(a.x - L.x) ? b : a)); return { can: c.k, x: c.x, y: c.y }; }
+  let best = null, bestV = -1;
+  for (const s of r.pads) {
+    const site = terrain.sites[s], rivals = [...host.bots.values()].filter((o) => o !== bot && o.target && o.target.site === s).length; // spread out: a pad others are heading for is worth less
+    const v = site.pts / (Math.abs(site.x - L.x) + 300) / (1 + 3 * rivals) * (0.7 + Math.random() * 0.6);
+    if (v > bestV) { bestV = v; best = s; }
+  }
+  return best === null ? null : { site: best, x: terrain.sites[best].x, y: terrain.sites[best].y };
+}
+/** Fly toward the target: pick the push we want, point the nose along it, thrust when lined up. */
+function botFly(bot, r, dt, now) {
+  const L = bot.L;
+  if (L.st === "x") { if (now >= L.respawnAt) spawnLander(L, now); return ""; }
+  if (now >= bot.thinkAt || !bot.target) {
+    bot.thinkAt = now + 600;
+    const t = botTarget(bot, r);
+    if (!bot.target || !t || t.site !== bot.target.site || t.can !== bot.target.can) { bot.target = t; bot.err = (Math.random() - 0.5) * 2 * CONFIG.botAim; }
+    if (bot.target && bot.target.site !== undefined && !r.pads.includes(bot.target.site)) bot.target = t;
+  }
+  if (L.st === "l") return flyLander(L, dt, 0, now >= bot.waitUntil && L.fuel > 10 ? 1 : 0);
+  const T = bot.target || { x: L.x, y: groundY(L.x) };
+  const tx = T.x + (T.site !== undefined ? bot.err * 0.3 : 0), dx = tx - L.x, far = Math.abs(dx) > 40;
+  let lo = Infinity; for (let x = Math.min(L.x, tx); x <= Math.max(L.x, tx); x += 40) lo = Math.min(lo, groundY(x)); // highest ground between here and there
+  const ground = groundY(L.x), cruiseY = Math.min(lo, ground) - 170;
+  const h = Math.max(0, ground - R - L.y), climbing = L.y > cruiseY + 40;
+  const wantVx = far ? clamp(dx * 0.7, -150, 150) * (climbing && T.can === undefined ? 0.25 : 1) : clamp(dx * 0.8, -40, 40); // climb before crossing hills
+  let wantVy;
+  if (T.can !== undefined) wantVy = clamp((T.y - L.y) * 1.2, -90, 90);
+  else if (far) wantVy = clamp((cruiseY - L.y) * 1.1, -110, 90);
+  else if (Math.abs(L.vx) > 22 || Math.abs(dx) > 25) wantVy = h < 90 ? -25 : 10; // over the pad but still sliding: hold height and line up first
+  else { wantVy = clamp(Math.sqrt(2 * 50 * h) * 0.8, 20, 150); if (h < 60) wantVy = Math.min(wantVy, CONFIG.botDescent); } // fall fast while high, brake in time
+  const ax = (wantVx - L.vx) * 1.8, ay = (wantVy - L.vy) * 2.2 - CONFIG.gravity; // the push we need from the engine (y down)
+  const wantA = h < 22 ? 0 : ay < 0 ? clamp(Math.atan2(ax, -ay), -1.0, 1.0) : 0;
+  const turn = clamp((wantA - L.a) * 6, -1, 1), lined = Math.abs(wantA - L.a) < 0.45;
+  const thrust = ay < -CONFIG.thrust * 0.25 && lined ? 1 : 0;
+  return flyLander(L, dt, turn, thrust);
+}
+function botsTick(r, dt, now) {
+  const others = landerList(r).filter((o) => o.id);
+  for (const [id, bot] of host.bots) {
+    const L = bot.L, res = botFly(bot, r, dt, now);
+    if (res === "land") { bot.waitUntil = now + CONFIG.botWaitMs[0] + Math.random() * (CONFIG.botWaitMs[1] - CONFIG.botWaitMs[0]); dust(L.x, L.y + R); const s = siteAt(L.x); if (s >= 0 && r.pads.includes(s)) landOn(id, s, L.x, L.soft); bot.thinkAt = 0; }
+    if (res === "crash") crashed(L, id, now);
+    if (L.st === "f") { bumpLander(L, others.filter((o) => o.id !== id)); for (const c of r.cans) if (Math.hypot(c.x - L.x, c.y - L.y) < 34) { grabCan(id, c.k, L.x, L.y); break; } }
+  }
+}
+function crashed(L, id, now) { L.respawnAt = now + CONFIG.respawnMs; boom(L.x, L.y, colorOf(round(), id)); }
+function writeBots(r) {
+  const now = performance.now();
+  if (now - host.lastBots < 90) return; // ~11/s
+  host.lastBots = now;
+  const q = (n) => Math.round(n * 10) / 10;
+  const raw = JSON.stringify([...host.bots].map(([i, { L }]) => ({ i, x: q(L.x), y: q(L.y), a: q(L.a), vx: q(L.vx), vy: q(L.vy), t: L.t, st: L.st, f: Math.round(L.fuel) })));
+  if (raw !== host.botsRaw) { host.botsRaw = raw; net.setShared("bots", raw); }
+}
+
+// ── ME ──────────────────────────────────────────────────────────────────────────────
+let myName = "", myColor = COLORS[0];
+try { myName = localStorage.getItem("mpa-name") || ""; } catch {}
+if (!myName) myName = ["Ace", "Pip", "Nova", "Ziggy", "Maple", "Taco"][Math.floor(Math.random() * 6)] + " " + (10 + Math.floor(Math.random() * 90));
+const me = { L: spawnLander({}, 0), r: 0, sent: "", lastSend: 0, grabbed: new Map(), autopilot: null, lastScore: 0 };
+const input = { turn: 0, thrust: false };
+
+function myTick(r, dt, now) {
+  if (r.id !== me.r) { me.r = r.id; spawnLander(me.L, now); me.grabbed.clear(); me.lastScore = 0; me.autopilot = { L: me.L, target: null, thinkAt: 0, err: 0, waitUntil: 0 }; }
+  const L = me.L, sc = r.scores[net.sessionId] || 0;
+  if (sc > me.lastScore) L.fuel = CONFIG.fuel; // a scored landing fills the tank
+  me.lastScore = sc;
+  if (r.ph === "play") {
+    let res;
+    if (L.st === "x") { if (now >= L.respawnAt) spawnLander(L, now); }
+    else if (ATTRACT) res = botFly(me.autopilot, r, dt, now);
+    else res = flyLander(L, dt, input.turn, input.thrust);
+    if (res === "land") {
+      dust(L.x, L.y + R); tone(520, 120, "triangle"); setTimeout(() => tone(780, 160, "triangle"), 90);
+      const s = siteAt(L.x);
+      if (s >= 0 && r.pads.includes(s)) { if (isHost()) landOn(net.sessionId, s, L.x, L.soft); else net.send("land", { s, x: Math.round(L.x), m: r.id, soft: L.soft ? 1 : 0 }); }
+      if (ATTRACT) me.autopilot.waitUntil = now + 500;
+    }
+    if (res === "crash") { crashed(L, net.sessionId, now); fx.shake = 16; tone(90, 500, "sawtooth", 0.08); }
+    if (L.st === "f") {
+      if (bumpLander(L, landerList(r).filter((o) => o.id !== net.sessionId))) { tone(200, 80, "square", 0.04); fx.shake = Math.max(fx.shake, 5); }
+      for (const c of r.cans) if (Math.hypot(c.x - L.x, c.y - L.y) < 34 && !me.grabbed.has(c.k)) {
+        me.grabbed.set(c.k, now);
+        if (isHost()) grabCan(net.sessionId, c.k, L.x, L.y); else net.send("grab", { k: c.k, x: Math.round(L.x), y: Math.round(L.y), m: r.id });
+      }
+    }
+    if (L.t && Math.random() < 0.7) flame(L);
+  }
+  publish(r);
+}
+function publish(r) {
+  const now = performance.now(), L = me.L;
+  if (now - me.lastSend < CONFIG.sendMs) return;
+  const q = (n) => Math.round(n * 10) / 10, v = JSON.stringify([q(L.x), q(L.y), q(L.a), q(L.vx), q(L.vy), L.t, L.st, r.id]);
+  if (v === me.sent) return;
+  me.sent = v; me.lastSend = now;
+  net.me.set("l", v);
+}
+
+// ── OTHERS ──────────────────────────────────────────────────────────────────────────
+// Other landers come in ~12 times a second. Between snapshots they fly on along their velocity,
+// and a jump at a new snapshot eases out, so they glide instead of stepping.
+const views = new Map(); // id -> { snap, at, ox, oy, a }
+function remoteLander(id, snap, now, dt) {
+  let v = views.get(id);
+  if (!v) { v = { snap: null, at: now, ox: 0, oy: 0, a: snap.a }; views.set(id, v); }
+  if (v.snap !== snap) {
+    if (v.snap) {
+      const p = viewPos(v, now), jump = Math.hypot(p.x - snap.x, p.y - snap.y);
+      v.ox = jump < 120 ? p.x - snap.x : 0; v.oy = jump < 120 ? p.y - snap.y : 0;
+      if (v.snap.st !== "x" && snap.st === "x") boom(snap.x, snap.y, colorOf(round(), id));
+      if (v.snap.st === "f" && snap.st === "l") dust(snap.x, snap.y + R);
+    }
+    v.snap = snap; v.at = now;
+  }
+  v.ox *= Math.exp(-dt * 8); v.oy *= Math.exp(-dt * 8); v.a += (snap.a - v.a) * (1 - Math.exp(-dt * 14));
+  const p = viewPos(v, now);
+  return { x: p.x, y: p.y, a: v.a, vx: snap.vx, vy: snap.vy, t: snap.t, st: snap.st };
+}
+function viewPos(v, now) {
+  const s = v.snap, k = s.st === "f" ? Math.min(0.25, (now - v.at) / 1000) : 0;
+  const x = s.x + s.vx * k + v.ox, y = s.y + s.vy * k + 0.5 * CONFIG.gravity * k * k * (s.t ? 0 : 1) + v.oy;
+  return { x, y: terrain ? Math.min(y, groundY(x) - R) : y };
+}
+let frameNow = 0;
+/** Every lander this client draws (and bumps against): { id, name, color, x, y, a, vx, vy, t, st }. */
+function landerList(r) {
+  const out = [], ps = S.entities.players || {}, live = new Set(livePlayers());
+  out.push({ id: net.sessionId, name: "You", color: myColor, ...me.L });
+  if (isHost()) for (const b of r.bots) { const bot = host.bots.get(b.i); if (bot) out.push({ id: b.i, name: b.n, color: b.c, ...bot.L }); }
+  return out.concat(remoteList(r, live, ps));
+}
+let remoteFrame = -1, remoteCache = [];
+/** Other people's landers (and, when I'm not the host, the bots), eased once per frame. */
+function remoteList(r, live, ps) {
+  if (remoteFrame === frameNow) return remoteCache;
+  const out = [], botSnaps = isHost() ? [] : cached("bots", S.shared.bots, []);
+  for (const b of r.bots) { const s = botSnaps.find((x) => x.i === b.i); if (s) out.push({ id: b.i, name: b.n, color: b.c, ...remoteLander(b.i, s, frameNow, frameDt) }); }
+  for (const id of live) {
+    if (id === net.sessionId) continue;
+    const a = cached("l:" + id, ps[id]?.l, null);
+    if (!Array.isArray(a) || a[7] !== r.id) continue;
+    const snap = viewSnap(id, a);
+    out.push({ id, name: nameOf(r, id), color: colorOf(r, id), ...remoteLander(id, snap, frameNow, frameDt) });
+  }
+  remoteFrame = frameNow; remoteCache = out;
+  return out;
+}
+const snapMemo = new Map();
+/** A player's packed array as an object (same object until it changes, so remoteLander sees new snapshots). */
+function viewSnap(id, a) { const m = snapMemo.get(id); if (m && m.a === a) return m.s; const s = { x: a[0], y: a[1], a: a[2], vx: a[3], vy: a[4], t: a[5], st: a[6] }; snapMemo.set(id, { a, s }); return s; }
+
+// ── DRAW ────────────────────────────────────────────────────────────────────────────
+const $ = (id) => document.getElementById(id);
+const cv = $("game"), ctx = cv.getContext("2d");
+let W = 0, H = 0, DPR = 1, zoom = 1, frameDt = 0;
+const cam = { x: 600, y: 700 };
+function fit() { DPR = Math.min(2, devicePixelRatio || 1); W = innerWidth; H = innerHeight; cv.width = W * DPR; cv.height = H * DPR; zoom = ATTRACT ? W / CONFIG.worldW : Math.max(0.5, Math.min(W / 1250, H / 820)); }
+addEventListener("resize", fit); addEventListener("orientationchange", fit); fit();
+const fx = { parts: [], pops: [], shake: 0 };
+const stars = Array.from({ length: 160 }, (_, i) => { const r = mulberry32(i * 99 + 7); return { x: r(), y: r(), s: r() * 1.6 + 0.3, tw: r() * 6 }; });
+function burst(x, y, color, n, sp) { for (let i = 0; i < n; i++) { const a = Math.random() * Math.PI * 2, s = sp * (0.3 + Math.random()); fx.parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.5 + Math.random() * 0.5, c: color, g: 1, r: 3 }); } }
+function boom(x, y, color) { burst(x, y, "#ffb347", 26, 260); burst(x, y, color, 14, 180); burst(x, y, "#ffffff", 8, 120); }
+function dust(x, y) { for (let i = 0; i < 14; i++) fx.parts.push({ x, y, vx: (Math.random() - 0.5) * 160, vy: -Math.random() * 40, life: 0.6 + Math.random() * 0.4, c: "#b8bccf", g: 0.2, r: 3 }); }
+function flame(L) { const a = L.a + (Math.random() - 0.5) * 0.4; fx.parts.push({ x: L.x - Math.sin(L.a) * 14, y: L.y + Math.cos(L.a) * 14, vx: L.vx - Math.sin(a) * 160, vy: L.vy + Math.cos(a) * 160, life: 0.25 + Math.random() * 0.2, c: Math.random() < 0.5 ? "#ffd23f" : "#ff7a1a", g: 0, r: 2.5 }); }
+function showLanded(id, pts, s) {
+  const site = terrain && terrain.sites[s]; if (!site) return;
+  fx.pops.push({ x: site.x, y: site.y - 60, text: pts > 0 ? `+${pts}` : "Too late!", color: pts > 0 ? colorOf(round(), id) : "#9fa8e0", at: performance.now(), mine: id === net.sessionId });
+  if (pts > 0) burst(site.x, site.y - 10, "#ffd23f", 22, 220);
+  if (id === net.sessionId) { if (pts > 0) { tone(660, 140, "triangle", 0.07); setTimeout(() => tone(990, 260, "triangle", 0.07), 120); } else tone(200, 200, "sine"); }
+}
+
+function toScreen(x, y) { return [(x - cam.x) * zoom + W / 2, (y - cam.y) * zoom + H / 2]; }
+function draw(r, now, dt) {
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  const sky = ctx.createLinearGradient(0, 0, 0, H); sky.addColorStop(0, "#04040d"); sky.addColorStop(1, "#141a3c");
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
+  if (!r) return;
+  terrainFor(r.seed);
+  const list = landerList(r), mine = list.find((o) => o.id === net.sessionId);
+  // camera: follow my lander (the preview shows the whole moon); never past the world's edges
+  const vw = W / zoom, vh = H / zoom, want = ATTRACT ? { x: CONFIG.worldW / 2, y: CONFIG.worldH - vh / 2 } : { x: mine.x, y: clamp((mine.y + groundY(mine.x)) / 2, mine.y, mine.y + vh * 0.3) + (touchUI ? 70 / zoom : 0) }; // keep the ground below in view (and above the touch buttons)
+  const k = 1 - Math.exp(-dt * 5);
+  cam.x += (want.x - cam.x) * k; cam.y += (want.y - cam.y) * k;
+  cam.x = vw >= CONFIG.worldW ? CONFIG.worldW / 2 : clamp(cam.x, vw / 2, CONFIG.worldW - vw / 2); cam.y = clamp(cam.y, Math.min(vh / 2 - 60, CONFIG.worldH / 2), CONFIG.worldH - vh / 2);
+  for (const s of stars) { ctx.globalAlpha = 0.4 + 0.4 * Math.sin(now / 900 + s.tw); ctx.fillStyle = "#fff"; ctx.fillRect(((s.x * W * 1.3 - cam.x * zoom * 0.08) % W + W) % W, ((s.y * H - cam.y * zoom * 0.05) % H + H) % H, s.s, s.s); }
+  ctx.globalAlpha = 1;
+  const [ex, ey] = [W * 0.8 - cam.x * zoom * 0.04, H * 0.18 - cam.y * zoom * 0.03]; // the earth, far away
+  const eg = ctx.createRadialGradient(ex - 10, ey - 10, 4, ex, ey, 34); eg.addColorStop(0, "#9ad8ff"); eg.addColorStop(0.6, "#2c6bd6"); eg.addColorStop(1, "#0b2a6b");
+  ctx.fillStyle = eg; ctx.beginPath(); ctx.arc(ex, ey, 30, 0, Math.PI * 2); ctx.fill();
+  const shx = (Math.random() - 0.5) * fx.shake, shy = (Math.random() - 0.5) * fx.shake;
+  ctx.setTransform(DPR * zoom, 0, 0, DPR * zoom, DPR * (W / 2 - cam.x * zoom + shx), DPR * (H / 2 - cam.y * zoom + shy)); // from here on: world units
+  drawMoon(r, now);
+  for (const c of r.cans) { // fuel cans
+    if (me.grabbed.has(c.k) && now - me.grabbed.get(c.k) < 1500) continue;
+    const bob = Math.sin(now / 400 + c.k) * 6;
+    ctx.save(); ctx.translate(c.x, c.y + bob);
+    ctx.shadowColor = "#ffd23f"; ctx.shadowBlur = 16 * zoom * DPR; ctx.fillStyle = "#ffd23f"; ctx.beginPath(); ctx.roundRect(-10, -14, 20, 28, 5); ctx.fill();
+    ctx.shadowBlur = 0; ctx.fillStyle = "#7a4d00"; ctx.fillRect(-6, -18, 12, 5); ctx.font = "900 13px system-ui, sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText("F", 0, 1);
+    ctx.restore();
+  }
+  for (let i = fx.parts.length - 1; i >= 0; i--) {
+    const p = fx.parts[i]; p.life -= dt; p.vy += CONFIG.gravity * p.g * dt; p.x += p.vx * dt; p.y += p.vy * dt;
+    if (p.life <= 0) { fx.parts.splice(i, 1); continue; }
+    ctx.globalAlpha = Math.min(1, p.life * 2); ctx.fillStyle = p.c; ctx.fillRect(p.x - p.r, p.y - p.r, p.r * 2, p.r * 2);
+  }
+  ctx.globalAlpha = 1;
+  for (const o of list) drawLander(o, o.id === net.sessionId, now);
+  for (const p of fx.pops) { // score pop-ups
+    const t = (now - p.at) / 1600; if (t > 1) continue;
+    ctx.globalAlpha = Math.min(1, (1 - t) * 3); ctx.font = `900 ${p.mine ? 34 : 24}px system-ui, sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.lineWidth = 5; ctx.strokeStyle = "#05060f"; ctx.strokeText(p.text, p.x, p.y - t * 50); ctx.fillStyle = p.color; ctx.fillText(p.text, p.x, p.y - t * 50);
+  }
+  ctx.globalAlpha = 1; fx.pops = fx.pops.filter((p) => now - p.at < 1600); fx.shake *= Math.exp(-dt * 8);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  if (!ATTRACT) { padArrows(r); miniMap(r, list); }
+  const t = Date.now();
+  if (r.ph === "count") big(String(Math.max(1, Math.ceil((r.startAt - t) / 1000))), "#ffd23f");
+  else if (r.ph === "play" && t - r.startAt < 700) big("GO!", "#80ed99");
+}
+function drawMoon(r, now) {
+  const h = terrain.h, st = CONFIG.step, x0 = Math.max(0, Math.floor((cam.x - W / zoom / 2) / st) - 1), x1 = Math.min(h.length - 1, Math.ceil((cam.x + W / zoom / 2) / st) + 1);
+  const g = ctx.createLinearGradient(0, 600, 0, CONFIG.worldH); g.addColorStop(0, "#5d6280"); g.addColorStop(1, "#262a40");
+  ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(x0 * st, CONFIG.worldH + 400);
+  for (let i = x0; i <= x1; i++) ctx.lineTo(i * st, h[i]);
+  ctx.lineTo(x1 * st, CONFIG.worldH + 400); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = "#b9bdd8"; ctx.lineWidth = 3; ctx.beginPath(); for (let i = x0; i <= x1; i++) ctx[i === x0 ? "moveTo" : "lineTo"](i * st, h[i]); ctx.stroke();
+  for (const c of terrain.craters) { const y = groundY(c.x); ctx.fillStyle = "#00000022"; ctx.beginPath(); ctx.ellipse(c.x, y + 40, c.r * 0.5, c.r * 0.14, 0, 0, Math.PI * 2); ctx.fill(); }
+  terrain.sites.forEach((s, i) => {
+    const lit = r.pads.includes(i), x = s.x - s.w / 2;
+    ctx.fillStyle = lit ? "#2b3352" : "#3a3f58"; ctx.fillRect(x, s.y, s.w, 8);
+    if (!lit) return;
+    const blink = Math.sin(now / 180) > 0, col = s.pts >= 400 ? "#ff5d8f" : s.pts >= 200 ? "#4cc9f0" : "#80ed99";
+    ctx.shadowColor = col; ctx.shadowBlur = 18 * zoom * DPR; ctx.fillStyle = col; ctx.fillRect(x, s.y - 3, s.w, 5); ctx.shadowBlur = 0;
+    ctx.fillStyle = blink ? "#fff" : col; ctx.beginPath(); ctx.arc(x + 3, s.y - 6, 4, 0, Math.PI * 2); ctx.arc(x + s.w - 3, s.y - 6, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = col + "22"; ctx.beginPath(); ctx.moveTo(x, s.y - 3); ctx.lineTo(x + s.w, s.y - 3); ctx.lineTo(x + s.w + 18, s.y - 150); ctx.lineTo(x - 18, s.y - 150); ctx.closePath(); ctx.fill(); // a beam of light
+    ctx.font = "900 22px system-ui, sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "alphabetic"; ctx.lineWidth = 4; ctx.strokeStyle = "#05060f"; ctx.strokeText(String(s.pts), s.x, s.y - 22); ctx.fillStyle = col; ctx.fillText(String(s.pts), s.x, s.y - 22);
+  });
+}
+function drawLander(o, mine, now) {
+  if (o.st === "x") return;
+  ctx.save(); ctx.translate(o.x, o.y); ctx.rotate(o.a);
+  if (o.t) { const f = 14 + Math.random() * 12; ctx.fillStyle = "#ff7a1a"; ctx.beginPath(); ctx.moveTo(-6, 10); ctx.lineTo(6, 10); ctx.lineTo(0, 10 + f); ctx.closePath(); ctx.fill(); ctx.fillStyle = "#ffd23f"; ctx.beginPath(); ctx.moveTo(-3.5, 10); ctx.lineTo(3.5, 10); ctx.lineTo(0, 10 + f * 0.6); ctx.closePath(); ctx.fill(); }
+  ctx.strokeStyle = "#d8dbef"; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(-8, 4); ctx.lineTo(-13, R); ctx.moveTo(8, 4); ctx.lineTo(13, R); ctx.moveTo(-16, R); ctx.lineTo(-10, R); ctx.moveTo(10, R); ctx.lineTo(16, R); ctx.stroke(); // legs
+  ctx.fillStyle = "#cfd3e8"; ctx.fillRect(-10, 0, 20, 9); // the base
+  ctx.shadowColor = o.color; ctx.shadowBlur = (mine ? 14 : 8) * zoom * DPR;
+  ctx.fillStyle = o.color; ctx.beginPath(); ctx.arc(0, -3, 11, Math.PI, 0); ctx.lineTo(11, 2); ctx.lineTo(-11, 2); ctx.closePath(); ctx.fill(); // the cabin
+  ctx.shadowBlur = 0; ctx.fillStyle = "#0b1030"; ctx.beginPath(); ctx.arc(0, -4, 5, 0, Math.PI * 2); ctx.fill(); ctx.fillStyle = "#9ad8ff"; ctx.beginPath(); ctx.arc(-1.5, -5.5, 2, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+  ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+  if (!ATTRACT) { ctx.font = `800 ${mine ? 14 : 12}px system-ui, sans-serif`; ctx.fillStyle = o.color; ctx.fillText(mine ? "You" : o.name, o.x, o.y - 24); }
+  if (mine && o.st === "f" && !ATTRACT) { // the landing gauge: green = slow enough to land
+    const ok = o.vy <= CONFIG.safeVy && Math.abs(o.vx) <= CONFIG.safeVx && Math.abs(o.a) <= CONFIG.safeTilt, gap = groundY(o.x) - o.y - R;
+    if (gap < 260) { ctx.font = "800 13px system-ui, sans-serif"; ctx.fillStyle = ok ? "#80ed99" : "#ff5d6e"; ctx.fillText(`${ok ? "▼ " : "⚠ "}${Math.max(0, Math.round(o.vy))}`, o.x + 34, o.y + 4); }
+  }
+}
+/** Arrows at the screen edge pointing to lit pads you can't see. */
+function padArrows(r) {
+  for (const s of r.pads) {
+    const site = terrain.sites[s], [sx, sy] = toScreen(site.x, site.y);
+    if (sx > -site.w * zoom / 2 && sx < W + site.w * zoom / 2 && sy > 0 && sy < H + 10) continue; // on screen
+    const ax = clamp(sx, 26, W - 26), ay = clamp(sy, 70, H - 40), a = Math.atan2(sy - ay, sx - ax), col = site.pts >= 400 ? "#ff5d8f" : site.pts >= 200 ? "#4cc9f0" : "#80ed99";
+    ctx.save(); ctx.translate(ax, ay); ctx.rotate(a); ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(14, 0); ctx.lineTo(-6, -9); ctx.lineTo(-6, 9); ctx.closePath(); ctx.fill(); ctx.restore();
+    ctx.font = "800 11px system-ui, sans-serif"; ctx.fillStyle = col; ctx.textAlign = "center"; ctx.fillText(String(site.pts), ax - Math.cos(a) * 22, ay - Math.sin(a) * 22 + 4);
+  }
+}
+function miniMap(r, list) {
+  const w = Math.min(200, W * 0.36), h = w * 0.32, x0 = W - w - 12, y0 = Math.max(12, parseFloat(getComputedStyle($("stats")).top) || 12), sx = w / CONFIG.worldW, sy = h / CONFIG.worldH;
+  ctx.fillStyle = "#0b0e22cc"; ctx.strokeStyle = "#ffffff33"; ctx.lineWidth = 1; ctx.beginPath(); ctx.roundRect(x0, y0, w, h, 6); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = "#8d92b5"; ctx.beginPath(); terrain.h.forEach((y, i) => ctx[i ? "lineTo" : "moveTo"](x0 + i * CONFIG.step * sx, y0 + y * sy)); ctx.stroke();
+  for (const s of r.pads) { const site = terrain.sites[s]; ctx.fillStyle = site.pts >= 400 ? "#ff5d8f" : site.pts >= 200 ? "#4cc9f0" : "#80ed99"; ctx.fillRect(x0 + (site.x - site.w / 2) * sx, y0 + site.y * sy - 2, Math.max(3, site.w * sx), 3); }
+  for (const c of r.cans) { ctx.fillStyle = "#ffd23f"; ctx.fillRect(x0 + c.x * sx - 1, y0 + c.y * sy - 1, 2.5, 2.5); }
+  for (const o of list) { if (o.st === "x") continue; ctx.fillStyle = o.color; ctx.beginPath(); ctx.arc(x0 + o.x * sx, y0 + o.y * sy, o.id === net.sessionId ? 3.5 : 2.5, 0, Math.PI * 2); ctx.fill(); }
+}
+function big(text, color) {
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.textAlign = "center"; ctx.textBaseline = "alphabetic"; ctx.font = `900 ${Math.min(96, W * 0.18)}px system-ui, sans-serif`;
+  ctx.lineWidth = 8; ctx.strokeStyle = "#05060f"; ctx.strokeText(text, W / 2, H * 0.4); ctx.fillStyle = color; ctx.fillText(text, W / 2, H * 0.4);
+}
+
+// ── HUD & RESULTS ───────────────────────────────────────────────────────────────────
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+let AC = null, hum = null;
+function unlockAudio() {
+  if (AC || ATTRACT) return;
+  try { AC = new AudioContext(); const o = AC.createOscillator(), f = AC.createBiquadFilter(); hum = AC.createGain(); o.type = "sawtooth"; o.frequency.value = 55; f.type = "lowpass"; f.frequency.value = 240; hum.gain.value = 0; o.connect(f).connect(hum).connect(AC.destination); o.start(); } catch {} // the engine rumble
+}
+function tone(f, ms, type = "sine", vol = 0.05) {
+  if (!AC) return;
+  const o = AC.createOscillator(), gn = AC.createGain(), t = AC.currentTime;
+  o.type = type; o.frequency.value = f; gn.gain.setValueAtTime(vol, t); gn.gain.exponentialRampToValueAtTime(0.0001, t + ms / 1000);
+  o.connect(gn).connect(AC.destination); o.start(t); o.stop(t + ms / 1000);
+}
+let overFor = -1, board = null, dropped = false;
+const startedAt = performance.now();
+function ranking(r) {
+  const ids = new Set([...humans(), ...r.bots.map((b) => b.i), ...Object.keys(r.scores).filter((id) => humans().includes(id))]);
+  if (!ATTRACT) ids.add(net.sessionId);
+  return [...ids].sort((a, b) => (r.scores[b] || 0) - (r.scores[a] || 0));
+}
+function hud(r) {
+  const n = humans().length;
+  $("net").textContent = ATTRACT ? "" : net.offline ? "Offline: playing with bots" : dropped ? "Reconnecting…" : `Online · ${n} player${n === 1 ? "" : "s"}${isHost() ? " · you run the pads" : ""}`;
+  if (hum && AC) hum.gain.setTargetAtTime(me.L.t && r && r.ph === "play" ? 0.06 : 0, AC.currentTime, 0.05);
+  if (!r || ATTRACT) { $("stats").innerHTML = $("clock").textContent = ""; $("over").hidden = true; return; }
+  const sc = r.scores[net.sessionId] || 0, place = ranking(r).indexOf(net.sessionId) + 1, t = Date.now();
+  $("stats").innerHTML = `${sc} <small>${place ? `#${place} of ${ranking(r).length}` : ""}</small><div id="fuel"><i style="width:${Math.round(me.L.fuel)}%;background:${me.L.fuel < 25 ? "#ff5d6e" : "#ffd23f"}"></i></div><small>${me.L.st === "x" ? "Crashed! Back in a moment" : me.L.fuel <= 0 ? "Out of fuel!" : "Fuel"}</small>`;
+  const secs = Math.ceil(Math.max(0, r.endsAt - t) / 1000);
+  $("clock").textContent = r.ph === "play" ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}` : "";
+  $("hint").textContent = touchUI ? "Tilt ⟲ ⟳ · hold THRUST · land slowly on a lit pad: smaller pads pay more" : "← → tilt · ↑ or Space thrust · land slowly on a lit pad: smaller pads pay more";
+  $("hint").style.opacity = performance.now() - startedAt < 12000 && r.ph !== "over" ? 1 : 0;
+  $("over").hidden = r.ph !== "over";
+  if (r.ph !== "over") return;
+  $("oTitle").textContent = !r.winner ? "Draw!" : r.winner === net.sessionId ? "You win!" : `${nameOf(r, r.winner)} wins!`;
+  const html = ranking(r).map((id) => `<li class="${id === net.sessionId ? "me" : ""}">${esc(nameOf(r, id))}<span>${r.scores[id] || 0}</span></li>`).join("");
+  if ($("places").innerHTML !== html) $("places").innerHTML = html;
+  $("oNext").textContent = `Next round in ${Math.max(0, Math.ceil((r.endsAt - t) / 1000))}s`;
+  $("again").textContent = me.ready === r.id ? "Ready ✓" : "Play again";
+  if (overFor === r.id) return;
+  overFor = r.id;
+  const list = $("board");
+  if (r.winner === net.sessionId) { tone(660, 300, "triangle", 0.07); setTimeout(() => tone(990, 400, "triangle", 0.07), 160); }
+  if (!board) { list.innerHTML = "<li>Leaderboards need a connection.</li>"; return; }
+  list.innerHTML = "<li>Loading…</li>";
+  (sc > 0 ? board.submit(sc).catch(() => null) : Promise.resolve()).then(() => board.top(10)).then(({ entries }) => {
+    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score}</span></li>`).join("") : "<li>No scores yet. Land on a pad.</li>";
+  }).catch(() => { list.innerHTML = "<li>Couldn't load the leaderboard.</li>"; });
+}
+/** Play again: when every person here is ready, the host starts the next round early. */
+function onReady(from) {
+  const r = round();
+  if (!r || r.ph !== "over") return;
+  host.ready = host.ready && host.readyFor === r.id ? host.ready : new Set(); host.readyFor = r.id; host.ready.add(from);
+  if (humans().every((id) => host.ready.has(id))) writeRound({ ...r, endsAt: Math.min(r.endsAt, Date.now() + 1000) });
+}
+$("again").addEventListener("click", () => { const r = round(); if (!r) return; me.ready = r.id; if (isHost()) onReady(net.sessionId); else net.send("ready", { m: r.id }); });
+
+/** Two players picked one color (they joined at once), or a bot has mine: the later sessionId picks another. */
+function fixColor() {
+  const ps = S.entities.players || {}, botColors = (round()?.bots || []).map((b) => b.c);
+  if (!Object.entries(ps).some(([id, p]) => id < net.sessionId && p.c === myColor) && !botColors.includes(myColor)) return;
+  const taken = new Set([...Object.entries(ps).filter(([id]) => id !== net.sessionId).map(([, p]) => p.c), ...botColors]);
+  myColor = COLORS.find((c) => !taken.has(c)) || myColor;
+  net.me.set("c", myColor);
+}
+
+// ── INPUT ───────────────────────────────────────────────────────────────────────────
+const touchUI = matchMedia("(pointer: coarse)").matches && !ATTRACT;
+document.body.classList.toggle("touch", touchUI);
+const held = new Set();
+function readKeys() {
+  input.turn = (held.has("arrowright") || held.has("d") || held.has("tr") ? 1 : 0) - (held.has("arrowleft") || held.has("a") || held.has("tl") ? 1 : 0);
+  input.thrust = held.has("arrowup") || held.has("w") || held.has(" ") || held.has("th");
+}
+addEventListener("keydown", (e) => { const k = e.key.toLowerCase(); if (["arrowleft", "arrowright", "arrowup", "arrowdown", " "].includes(k)) e.preventDefault(); unlockAudio(); held.add(k); readKeys(); });
+addEventListener("keyup", (e) => { held.delete(e.key.toLowerCase()); readKeys(); });
+addEventListener("blur", () => { held.clear(); readKeys(); });
+for (const id of ["tl", "tr", "th"]) {
+  const b = $(id); b.hidden = !touchUI;
+  b.addEventListener("pointerdown", (e) => { e.preventDefault(); unlockAudio(); b.setPointerCapture(e.pointerId); held.add(id); b.classList.add("on"); readKeys(); });
+  for (const ev of ["pointerup", "pointercancel", "lostpointercapture"]) b.addEventListener(ev, () => { held.delete(id); b.classList.remove("on"); readKeys(); });
+}
+cv.addEventListener("pointerdown", (e) => { e.preventDefault(); unlockAudio(); });
+document.addEventListener("touchmove", (e) => { if (!e.target.closest(".card")) e.preventDefault(); }, { passive: false });
+
+// ── MAIN LOOP ───────────────────────────────────────────────────────────────────────
+let last = performance.now(), lastHb = 0, lastHud = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (performance.now() - lastTick > 1000) { hostHold = performance.now() + 700; host.was = false; host.last = null; } // the tab was frozen or in the background: someone else may have hosted meanwhile, so let its state arrive, then adopt it
+  lastTick = performance.now(); // not the rAF time: after a long freeze Chrome can stamp the first frame from before it ended
+  const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); last = now;
+  frameNow = now; frameDt = dt;
+  if (now - lastHb > 1000) { lastHb = now; net.me.set("hb", Date.now()); fixColor(); }
+  if (isHost()) hostTick(dt, Date.now()); else host.was = false;
+  const r = round();
+  if (r) { terrainFor(r.seed); myTick(r, dt, Date.now()); }
+  draw(r, now, dt);
+  if (now - lastHud > 120) { lastHud = now; hud(r); }
+}
+
+(async function start() {
+  net = await connect();
+  net.onState((st) => { S = st; });
+  net.onDisconnect(() => { dropped = true; $("net").textContent = "Reconnecting…"; });
+  net.onReconnect(() => { dropped = false; });
+  net.on("land", (msg, from) => { const r = round(); if (isHost() && msg && r && msg.m === r.id) landOn(from, msg.s | 0, +msg.x, !!msg.soft); });
+  net.on("grab", (msg, from) => { const r = round(); if (isHost() && msg && r && msg.m === r.id) grabCan(from, msg.k, +msg.x, +msg.y); });
+  net.on("landed", (msg) => { const r = round(); if (msg && r && msg.m === r.id) showLanded(msg.to, msg.pts | 0, msg.s | 0); });
+  net.on("fuel", (msg) => { const r = round(); if (msg && r && msg.m === r.id) giveFuel(msg.to, +msg.x, +msg.y); });
+  net.on("ready", (msg, from) => { if (isHost()) onReady(from); });
+  if (!net.offline && typeof MP !== "undefined") board = MP.auth({ key: MP_CONNECT.key, apiUrl: MP_CONNECT.apiUrl }).leaderboard(CONFIG.board);
+  const taken = new Set([...Object.entries(S.entities.players || {}).filter(([id]) => id !== net.sessionId).map(([, p]) => p.c), ...(round()?.bots || []).map((b) => b.c)]);
+  myColor = COLORS.find((c) => !taken.has(c)) || COLORS[Math.floor(Math.random() * COLORS.length)];
+  net.me.set({ n: myName, c: myColor, hb: Date.now() });
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
