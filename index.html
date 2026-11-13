@@ -598,10 +598,16 @@ function drawLander(o, mine, now) {
 }
 /** Arrows at the screen edge pointing to lit pads you can't see. */
 function padArrows(r) {
+  const placed = [];
   for (const s of r.pads) {
     const site = terrain.sites[s], [sx, sy] = toScreen(site.x, site.y);
     if (sx > -site.w * zoom / 2 && sx < W + site.w * zoom / 2 && sy > 0 && sy < H + 10) continue; // on screen
-    const ax = clamp(sx, 26, W - 26), ay = clamp(sy, 70, H - 40), a = Math.atan2(sy - ay, sx - ax), col = site.pts >= 400 ? "#ff5d8f" : site.pts >= 200 ? "#4cc9f0" : "#80ed99";
+    const ax = clamp(sx, 26, W - 26);
+    let ay = clamp(sy, 70, H - 40);
+    const stackDir = ay > H / 2 ? -32 : 32;
+    for (let n = 0; n < 8 && placed.some(([px, py]) => Math.abs(px - ax) < 40 && Math.abs(py - ay) < 30); n++) ay += stackDir; // two pads the same way: stack the arrows, never on top of each other
+    placed.push([ax, ay]);
+    const a = Math.atan2(sy - ay, sx - ax), col = site.pts >= 400 ? "#ff5d8f" : site.pts >= 200 ? "#4cc9f0" : "#80ed99";
     ctx.save(); ctx.translate(ax, ay); ctx.rotate(a); ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(14, 0); ctx.lineTo(-6, -9); ctx.lineTo(-6, 9); ctx.closePath(); ctx.fill(); ctx.restore();
     ctx.font = "800 11px system-ui, sans-serif"; ctx.fillStyle = col; ctx.textAlign = "center"; ctx.fillText(String(site.pts), ax - Math.cos(a) * 22, ay - Math.sin(a) * 22 + 4);
   }
