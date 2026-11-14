@@ -23,6 +23,7 @@
   .card h2 { margin: 0 0 6px; font-size: 26px; }
   .card h3 { margin: 12px 0 0; font-size: 12px; letter-spacing: .1em; color: #9fa8e0; }
   .card ol { text-align: left; margin: 8px 0; padding-left: 26px; font-size: 14px; } .card li span { float: right; font-variant-numeric: tabular-nums; } .card li.me { color: #ffd23f; font-weight: 700; }
+  .card li.note { list-style: none; margin-left: -26px; } /* a status line, not a numbered entry */
   button.go { width: 100%; min-height: 48px; border: 0; border-radius: 12px; background: #ffd23f; color: #141834; font: 800 17px system-ui, sans-serif; cursor: pointer; margin-top: 8px; }
   #oNext { color: #9fa8e0; font-size: 13px; margin-top: 8px; }
   .pad { position: fixed; bottom: max(24px, calc(env(safe-area-inset-bottom) + 14px)); width: 76px; height: 76px; border-radius: 50%; border: 2px solid #ffffff55; background: #ffffff14; color: #fff; font: 800 26px system-ui, sans-serif; touch-action: none; }
@@ -41,7 +42,7 @@
 <button class="pad" id="tl" hidden>⟲</button><button class="pad" id="tr" hidden>⟳</button><button class="pad" id="th" hidden>THRUST</button>
 <div id="over" hidden><div class="card">
   <h2 id="oTitle"></h2><ol id="places"></ol>
-  <h3>BEST ROUND SCORE</h3><ol id="board"><li>Loading the leaderboard…</li></ol>
+  <h3>BEST ROUND SCORE</h3><ol id="board"><li class="note">Loading the leaderboard…</li></ol>
   <button class="go" id="again">Play again</button><div id="oNext"></div>
 </div></div>
 <script>
@@ -668,11 +669,11 @@ function hud(r) {
   overFor = r.id;
   const list = $("board");
   if (r.winner === net.sessionId) { tone(660, 300, "triangle", 0.07); setTimeout(() => tone(990, 400, "triangle", 0.07), 160); }
-  if (!board) { list.innerHTML = "<li>Leaderboards need a connection.</li>"; return; }
-  list.innerHTML = "<li>Loading…</li>";
+  if (!board) { list.innerHTML = "<li class='note'>Leaderboards need a connection.</li>"; return; }
+  list.innerHTML = "<li class='note'>Loading…</li>";
   (sc > 0 ? board.submit(sc).catch(() => null) : Promise.resolve()).then(() => board.top(10)).then(({ entries }) => {
-    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score}</span></li>`).join("") : "<li>No scores yet. Land on a pad.</li>";
-  }).catch(() => { list.innerHTML = "<li>Couldn't load the leaderboard.</li>"; });
+    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score}</span></li>`).join("") : "<li class='note'>No scores yet. Land on a pad.</li>";
+  }).catch(() => { list.innerHTML = "<li class='note'>Couldn't load the leaderboard.</li>"; });
 }
 /** Play again: when every person here is ready, the host starts the next round early. */
 function onReady(from) {
